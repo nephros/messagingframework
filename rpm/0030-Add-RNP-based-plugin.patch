@@ -26,10 +26,10 @@ index 1e3fee2e..9c56dc79 100644
 +
 diff --git a/src/plugins/crypto/common/qrnp.cpp b/src/plugins/crypto/common/qrnp.cpp
 new file mode 100644
-index 00000000..121b35f3
+index 00000000..dd8ab07d
 --- /dev/null
 +++ b/src/plugins/crypto/common/qrnp.cpp
-@@ -0,0 +1,628 @@
+@@ -0,0 +1,627 @@
 +/****************************************************************************
 +**
 +** Copyright (C) 2018 Caliste Damien.
@@ -426,12 +426,11 @@ index 00000000..121b35f3
 +        // Will be activated later.
 +        // gpgme_set_pinentry_mode(ctx, GPGME_PINENTRY_MODE_LOOPBACK);
 +        // gpgme_set_passphrase_cb(ctx, gpgme_passphraseCallback, (void*)this);
-+        // gpgme_set_passphrase_cb(ctx, gpgme_passphraseCallback, (void*)this);
-+        //qCWarning(lcMessaging) << "passphrase callback not implemented";
++        qCWarning(lcMessaging) << "passphrase callback not implemented";
 +
-+        qCWarning(lcMessaging) << "passphrase callback set from RNP, not tested";
-+        if (rnp_ffi_set_pass_provider(ctx, rnp_passphraseCallback, (void*)this)) != RNP_SUCCESS {
-+            qCWarning(lcMessaging) << "Setting passphrase callback failed, using testing workflow";
++        //qCWarning(lcMessaging) << "passphrase callback set from RNP, not tested";
++        //if (rnp_ffi_set_pass_provider(ctx, rnp_passphraseCallback, (void*)this)) != RNP_SUCCESS {
++        //    qCWarning(lcMessaging) << "Setting passphrase callback failed, using testing workflow";
 +            // For testing purpose, just creating a md5 of data
 +            // and use this as signature data.
 +            QCryptographicHash md5(QCryptographicHash::Md5);
@@ -441,7 +440,7 @@ index 00000000..121b35f3
 +            micalg = "pgp-md5";
 +
 +            return QMailCrypto::SignatureValid;
-+        }
++        //}
 +    }
 +
 +    err = rnp_op_sign_execute(sign);
