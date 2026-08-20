@@ -26,7 +26,7 @@ index 1e3fee2e..9c56dc79 100644
 +
 diff --git a/src/plugins/crypto/common/qrnp.cpp b/src/plugins/crypto/common/qrnp.cpp
 new file mode 100644
-index 00000000..6ef24839
+index 00000000..28cd174c
 --- /dev/null
 +++ b/src/plugins/crypto/common/qrnp.cpp
 @@ -0,0 +1,625 @@
@@ -537,7 +537,7 @@ index 00000000..6ef24839
 +        return toSignatureResult(ctx.err);
 +    }
 +
-+    RNPOutData ouput;
++    RNPOutputData output;
 +    if (!output.isValid()) {
 +        qCWarning(lcMessaging) << "cannot create signature data:" << signed_text.errorMessage();
 +        return toSignatureResult(output.err);
