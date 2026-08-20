@@ -6,6 +6,22 @@ index 4005b4a0..75e0b752 100644
  add_subdirectory(gpgme)
  add_subdirectory(smime)
 +add_subdirectory(rnp)
+diff --git a/src/plugins/crypto/common.pri b/src/plugins/crypto/common.pri
+index 1e3fee2e..6fb22ceb 100644
+--- a/src/plugins/crypto/common.pri
++++ b/src/plugins/crypto/common.pri
+@@ -4,3 +4,11 @@ INCLUDEPATH += $$PWD/common/
+ 
+ HEADERS += $$PWD/common/qgpgme.h
+ SOURCES += $$PWD/common/qgpgme.cpp
++
++LIBS += $$system(pkg-config --libs librnp)
++
++INCLUDEPATH += $$PWD/common/
++
++HEADERS += $$PWD/common/qrnp.h
++SOURCES += $$PWD/common/qrnp.cpp
++
 diff --git a/src/plugins/crypto/common/qrnp.cpp b/src/plugins/crypto/common/qrnp.cpp
 new file mode 100644
 index 00000000..992f69a0
@@ -645,18 +661,18 @@ index 00000000..93e63ad3
 +#endif
 diff --git a/src/plugins/crypto/rnp/rnp.pro b/src/plugins/crypto/rnp/rnp.pro
 new file mode 100644
-index 00000000..b4898376
+index 00000000..e29a39ab
 --- /dev/null
 +++ b/src/plugins/crypto/rnp/rnp.pro
 @@ -0,0 +1,10 @@
 +TEMPLATE = lib
-+TARGET = gpgme
++TARGET = rnp
 +PLUGIN_TYPE = messagingframework/crypto
 +load(qt_plugin)
 +QT = core qmfclient
 +
-+HEADERS += gpgmeplugin.h
-+SOURCES += gpgmeplugin.cpp
++HEADERS += rnpplugin.h
++SOURCES += rnpplugin.cpp
 +
 +include(../common.pri)
 diff --git a/src/plugins/crypto/rnp/rnpplugin.cpp b/src/plugins/crypto/rnp/rnpplugin.cpp

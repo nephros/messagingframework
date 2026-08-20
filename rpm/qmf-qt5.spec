@@ -29,6 +29,7 @@ BuildRequires:  qt5-plugin-platform-minimal
 BuildRequires:  qt5-plugin-sqldriver-sqlite
 BuildRequires:  fdupes
 BuildRequires:  gpgme-devel
+BuildRequires:  pkgconfig(librnp)
 Requires:       buteo-syncfw-qt5 >= 0.7.16 
 
 # i=1; for j in 00*patch; do printf "Patch%04d: %s\n" $i $j; i=$((i+1));done
