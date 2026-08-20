@@ -49,6 +49,8 @@ Patch0014: 0014-Revert-Bump-version-to-6.0.0-since-we-build-against-.patch
 Patch0015: 0015-Fallback-to-sso-credential-plugin.patch
 Patch0016: 0016-Register-a-dummy-service-for-storage-notifications.patch
 
+Patch0030: 0030-Add-RNP-based-plugin.patch
+
 %description
 The Qt Messaging Framework, QMF, consists of a C++ library and daemon server
 process that can be used to build email clients, and more generally software

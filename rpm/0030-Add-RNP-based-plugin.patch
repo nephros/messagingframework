@@ -1,0 +1,883 @@
+diff --git a/src/plugins/crypto/CMakeLists.txt b/src/plugins/crypto/CMakeLists.txt
+index 4005b4a0..75e0b752 100644
+--- a/src/plugins/crypto/CMakeLists.txt
++++ b/src/plugins/crypto/CMakeLists.txt
+@@ -1,2 +1,3 @@
+ add_subdirectory(gpgme)
+ add_subdirectory(smime)
++add_subdirectory(rnp)
+diff --git a/src/plugins/crypto/common/qrnp.cpp b/src/plugins/crypto/common/qrnp.cpp
+new file mode 100644
+index 00000000..992f69a0
+--- /dev/null
++++ b/src/plugins/crypto/common/qrnp.cpp
+@@ -0,0 +1,542 @@
++/****************************************************************************
++**
++** Copyright (C) 2018 Caliste Damien.
++** Contact: Damien Caliste <dcaliste@free.fr>
++**
++** Copyright (C) 2018 The Qt Company Ltd.
++** Contact: https://www.qt.io/licensing/
++**
++** This file is part of the Qt Messaging Framework.
++**
++** $QT_BEGIN_LICENSE:LGPL21$
++** Commercial License Usage
++** Licensees holding valid commercial Qt licenses may use this file in
++** accordance with the commercial license agreement provided with the
++** Software or, alternatively, in accordance with the terms contained in
++** a written agreement between you and The Qt Company. For licensing terms
++** and conditions see http://www.qt.io/terms-conditions. For further
++** information use the contact form at http://www.qt.io/contact-us.
++**
++** GNU Lesser General Public License Usage
++** Alternatively, this file may be used under the terms of the GNU Lesser
++** General Public License version 2.1 or version 3 as published by the Free
++** Software Foundation and appearing in the file LICENSE.LGPLv21 and
++** LICENSE.LGPLv3 included in the packaging of this file. Please review the
++** following information to ensure the GNU Lesser General Public License
++** requirements will be met: https://www.gnu.org/licenses/lgpl.html and
++** http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html.
++**
++** As a special exception, The Qt Company gives you certain additional
++** rights. These rights are described in The Qt Company LGPL Exception
++** version 1.1, included in the file LGPL_EXCEPTION.txt in this package.
++**
++** $QT_END_LICENSE$
++**
++****************************************************************************/
++
++#include "qrnp.h"
++#include <rnp_err.h>
++#include <qmaillog.h>
++
++#include <QCryptographicHash>
++
++QMailCryptoRNP::QMailCryptoRNP()
++    : m_cb(0)
++{
++    rnp_result_t err;
++
++    qCInfo(lcMessaging) << "Using RNP" << rnp_version_string_full();
++
++    /*
++    gpgme_check_version(NULL);
++    err = gpgme_engine_check_version(protocol);
++    if (err != RNP_SUCCESS) {
++        qCWarning(lcMessaging) << QStringLiteral("cannot use %1 engine.").arg(gpgme_get_protocol_name(protocol));
++
++        gpgme_engine_info_t info;
++        err = gpgme_get_engine_info(&info);
++        if (!err) {
++            while (info) {
++                qCWarning(lcMessaging) << "protocol:"
++                                       << gpgme_get_protocol_name(info->protocol);
++                if (info->file_name && !info->version)
++                    qCWarning(lcMessaging) << "engine " << info->file_name
++                                           << " not installed properly";
++                else if (info->file_name && info->version && info->req_version)
++                    qCWarning(lcMessaging) << "engine " << info->file_name
++                                           << " version " << info->version
++                                           << " installed, but at least version "
++                                           << info->req_version << " required";
++                else
++                    qCWarning(lcMessaging) << "unknown issue";
++                info = info->next;
++            }
++        } else {
++            qCWarning(lcMessaging) << "cannot get engine info:"
++                                   << err;
++        }
++    }
++    */
++}
++
++static QByteArray canonicalizeStr(const char *str)
++{
++    QByteArray out;
++    out.reserve(strlen(str) * 1.1);
++
++    for (const char *p = str; *p != '\0'; ++p) {
++        if (*p != '\r') {
++            if (*p == '\n')
++                out.append('\r');
++            out.append(*p);
++        }
++    }
++
++    return out;
++}
++
++static QMailCrypto::SignatureResult toSignatureResult(rnp_result_t err)
++{
++    switch (err) {
++    case RNP_SUCCESS:
++        return QMailCrypto::SignatureValid;
++    case RNP_ERROR_SIG_EXPIRED:
++        return QMailCrypto::SignatureExpired;
++    case RNP_ERROR_SIG_EXPIRED_KEY:
++        return QMailCrypto::KeyExpired;
++    //case GPG_ERR_CERT_REVOKED:
++    //    return QMailCrypto::CertificateRevoked;
++    case RNP_ERROR_SIG_UNUSABLE_KEY:
++        return QMailCrypto::UnusableKey;
++    case RNP_ERROR_BAD_PASSWORD:
++        return QMailCrypto::BadPassphrase;
++    case RNP_ERROR_SIGNATURE_INVALID:
++        return QMailCrypto::BadSignature;
++    //case GPG_ERR_NO_DATA:
++    //case GPG_ERR_INV_VALUE:
++    //case GPG_ERR_NO_PUBKEY:
++    case RNP_ERROR_SIG_NO_SIGNER_KEY:
++        return QMailCrypto::MissingKey;
++    default:
++        return QMailCrypto::UnknownError;
++    }
++}
++
++void QMailCryptoRNP::setPassphraseCallback(QMailCrypto::PassphraseCallback cb)
++{
++    m_cb = cb;
++}
++
++QString QMailCryptoRNP::passphraseCallback(const QString &info) const
++{
++    if (m_cb)
++        return m_cb(info);
++    return QString();
++}
++
++// To be used later, see the if (m_cb) in getSignature.
++// static rnp_result_t gpgme_passphraseCallback(void *hook, const char *uid_hint,
++//                                               const char *passphrase_info,
++//                                               int prev_was_bad, int fd)
++// {
++//     QMailCryptoSMIME *obj = static_cast<QMailCryptoSMIME*>(hook);
++
++//     (void)uid_hint;
++//     (void)prev_was_bad;
++
++//     QString pass = obj->passphraseCallback(QString(passphrase_info));
++//     gpgme_io_write(fd, pass.toLocal8Bit().data(), pass.length());
++//     gpgme_io_write(fd, "\n", 1);
++
++//     return RNP_SUCCESS;
++// }
++
++QMailCrypto::SignatureResult QMailCryptoRNP::getSignature(const QByteArray &message,
++                                                            const QStringList &keys,
++                                                            QByteArray &result,
++                                                            QByteArray &micalg) const
++{
++    result.clear();
++    micalg.clear();
++
++    rnp_ffi_t        ctx = NULL;
++    rnp_input_t      keyfile = NULL;
++    rnp_input_t      input = NULL;
++    rnp_output_t     output = NULL;
++    rnp_op_sign_t    sign = NULL;
++    rnp_key_handle_t key = NULL;
++    //int              result = 1;
++
++    rnp_result_t err;
++
++    /* initialize FFI object */
++    err = rnp_ffi_create(&ctx, "GPG", "GPG");
++    if (err != RNP_SUCCESS) {
++        qCWarning(lcMessaging) << "cannot create context:" << err;
++        return toSignatureResult(err);
++    }
++
++    /* create file input and memory output objects for the encrypted message and decrypted
++     * message */
++    QByteArray mess(canonicalizeStr(message));
++    err = rnp_input_from_memory(&input,
++                                (uint8_t*) mess.constData(),
++                                mess.size(),
++                                false);
++    if (err != RNP_SUCCESS) {
++        qCWarning(lcMessaging) << "cannot create encoded data:" << err;
++        return toSignatureResult(err);
++    }
++
++    if (rnp_output_to_memory(&output, 0) != RNP_SUCCESS) {
++        qCWarning(lcMessaging) << "failed to create output object" << err;
++        return toSignatureResult(err);
++    }
++
++    /* initialize and configure sign operation */
++    if (rnp_op_sign_cleartext_create(&sign, ctx, input, output) != RNP_SUCCESS) {
++        qCWarning(lcMessaging) << "failed to create sign operation" << err;
++        return toSignatureResult(err);
++    }
++
++    /* armor, file name, compression */
++    rnp_op_sign_set_armor(sign, true);
++    //rnp_op_sign_set_file_name(sign, "message.txt");
++    rnp_op_sign_set_file_mtime(sign, (uint32_t) time(NULL));
++    //rnp_op_sign_set_compression(sign, "ZIP", 6);
++    /* signatures creation time - by default will be set to the current time as well */
++    rnp_op_sign_set_creation_time(sign, (uint32_t) time(NULL));
++    /* signatures expiration time - by default will be 0, i.e. never expire */
++    rnp_op_sign_set_expiration_time(sign, 365 * 24 * 60 * 60);
++    /* set hash algorithm - should be compatible for all signatures */
++    rnp_op_sign_set_hash(sign, RNP_ALGNAME_SHA256);
++
++    micalg = "pgp-";
++    micalg += QByteArray(RNP_ALGNAME_SHA256).toLower();
++
++    for (QStringList::const_iterator it = keys.begin(); it != keys.end(); it++) {
++        // param identifier_type string with type of the identifier: userid, keyid, fingerprint, grip
++        if (rnp_locate_key(ctx, "userid", it->toLocal8Bit().data(), &key) != RNP_SUCCESS) {
++            qCWarning(lcMessaging) << "failed to locate signing key " <<  it->toLocal8Bit();
++            return QMailCrypto::MissingKey;
++        }
++        /* we do not need pointer to the signature so passing NULL as the last parameter */
++        err = rnp_op_sign_add_signature(sign, key, NULL);
++        if (err != RNP_SUCCESS) {
++            qCWarning(lcMessaging) << "failed to add signature for key" << key << err;
++            return toSignatureResult(err);
++        }
++
++        /* do not forget to destroy key handle */
++        rnp_key_handle_destroy(key);
++        key = NULL;
++
++    }
++
++    /* finally do signing */
++    err = rnp_op_sign_execute(sign);
++    if (err != RNP_SUCCESS) {
++        qCWarning(lcMessaging) << "failed to sign" << err;
++        return toSignatureResult(err);
++    }
++
++/*
++    GPGmeData sig;
++    if (!sig.isValid()) {
++        qCWarning(lcMessaging) << "cannot create signature data:" << sig.errorMessage();
++        return toSignatureResult(sig.err);
++    }
++    gpgme_error_t err;
++    err = gpgme_data_set_encoding(sig, GPGME_DATA_ENCODING_ARMOR);
++    if (gpgme_err_code(err) != GPG_ERR_NO_ERROR) {
++        qCWarning(lcMessaging) << "cannot set ascii armor on signature:" << gpgme_strerror(err);
++        return toSignatureResult(err);
++    }
++
++    QByteArray mess(canonicalizeStr(message));
++    GPGmeData data(mess);
++    if (!data.isValid()) {
++        qCWarning(lcMessaging) << "cannot create message data:" << data.errorMessage();
++        return toSignatureResult(data.err);
++    }
++
++    GPGmeContext ctx(m_protocol);
++    if (!ctx) {
++        qCWarning(lcMessaging) << "cannot create context:" << ctx.errorMessage();
++        return toSignatureResult(ctx.err);
++    }
++    gpgme_set_textmode(ctx, 1);
++    gpgme_set_armor(ctx, 1);
++    gpgme_signers_clear(ctx);
++
++    for (QStringList::const_iterator it = keys.begin(); it != keys.end(); it++) {
++        gpgme_key_t key;
++        const int RETRIEVE_SECRET_KEY = 1;
++        err = gpgme_get_key(ctx, it->toLocal8Bit().data(), &key, RETRIEVE_SECRET_KEY);
++        if (gpgme_err_code(err) != GPG_ERR_NO_ERROR) {
++            qCWarning(lcMessaging) << "cannot retrieve key" << *it;
++            return toSignatureResult(err);
++        }
++        err = gpgme_signers_add(ctx, key);
++        if (gpgme_err_code(err) != GPG_ERR_NO_ERROR) {
++            qCWarning(lcMessaging) << "cannot add key" << *it;
++            gpgme_key_unref(key);
++            return toSignatureResult(err);
++        }
++        gpgme_key_unref(key);
++    }
++
++    if (m_cb) {
++        // Only working for gnupg >= 2.1
++        // Will be activated later.
++        // gpgme_set_pinentry_mode(ctx, GPGME_PINENTRY_MODE_LOOPBACK);
++        // gpgme_set_passphrase_cb(ctx, gpgme_passphraseCallback, (void*)this);
++        qCWarning(lcMessaging) << "passphrase callback not implemented";
++
++        // For testing purpose, just creating a md5 of data
++        // and use this as signature data.
++        QCryptographicHash md5(QCryptographicHash::Md5);
++        md5.addData(mess);
++        result = md5.result().toHex();
++
++        micalg = "pgp-md5";
++
++        return QMailCrypto::SignatureValid;
++    }
++
++    err = gpgme_op_sign(ctx, data, sig, GPGME_SIG_MODE_DETACH);
++    if (gpgme_err_code(err) != GPG_ERR_NO_ERROR) {
++        qCWarning(lcMessaging) << "cannot sign" << gpgme_strerror(err);
++        return toSignatureResult(err);
++    }
++
++    gpgme_sign_result_t res;
++    res = gpgme_op_sign_result(ctx);
++    if (res->invalid_signers) {
++        qCWarning(lcMessaging) << "found invalid signer" << res->invalid_signers->fpr;
++        return QMailCrypto::MissingKey;
++    }
++    if (!res->signatures || res->signatures->next) {
++        qCWarning(lcMessaging) << "found zero or more than one signature";
++        return QMailCrypto::MissingKey;
++    }
++    micalg = "pgp-";
++    micalg += QByteArray(gpgme_hash_algo_name(res->signatures->hash_algo)).toLower();
++
++    result = sig.releaseData();
++*/
++
++    rnp_input_destroy(keyfile);
++    rnp_key_handle_destroy(key);
++    rnp_op_sign_destroy(sign);
++    rnp_input_destroy(input);
++    rnp_output_destroy(output);
++    rnp_ffi_destroy(ctx);
++    return QMailCrypto::SignatureValid;
++}
++
++QMailCrypto::SignatureResult QMailCryptoRNP::computeSignature(QMailMessagePartContainer &part,
++                                                                const QStringList &keys,
++                                                                QByteArray &signedData,
++                                                                QByteArray &micalg) const
++{
++    /* Generate the transfer output corresponding to part. */
++    QMailMessagePart data;
++    if (!partHasSignature(part)) {
++        data.setMultipartType(part.multipartType());
++        if (part.multipartType() == QMailMessagePartContainer::MultipartNone) {
++            data.setBody(part.body());
++        } else {
++            for (uint i = 0; i < part.partCount(); i++)
++                data.appendPart(part.partAt(i));
++        }
++    } else {
++        data = part.partAt(0);
++    }
++    QByteArray result = data.toRfc2822();
++
++    QMailCrypto::SignatureResult out;
++    out = getSignature(result, keys, signedData, micalg);
++    if (out != QMailCrypto::SignatureValid)
++        return out;
++
++    /* Signature data has been successfully generated. */
++    data.setUndecodedData(result);
++
++    // Change the part object to have two parts, if not already.
++    if (!partHasSignature(part)) {
++        if (part.multipartType() != QMailMessagePartContainer::MultipartNone) {
++            // Erase content.
++            part.clearParts();
++        }
++        // Setup new two parts content.
++        part.appendPart(data);
++        QMailMessagePart signature;
++        part.appendPart(signature);
++    }
++
++    return QMailCrypto::SignatureValid;
++}
++
++QMailCrypto::SignatureResult QMailCryptoRNP::verify(const QByteArray &sigData,
++                                                      const QByteArray &messageData,
++                                                      QList<QMailCrypto::KeyResult> &keyResults) const
++{
++    keyResults.clear();
++    rnp_ffi_t       ctx = NULL;
++    rnp_op_verify_t verify = NULL;
++    rnp_input_t     input = NULL;
++    rnp_output_t    output = NULL;
++    uint8_t *       buf = NULL;
++    size_t          buf_len = 0;
++    size_t          sigcount = 0;
++    int             result = 1;
++
++    rnp_result_t err;
++
++    /* initialize FFI object */
++    err = rnp_ffi_create(&ctx, "GPG", "GPG");
++    if (err != RNP_SUCCESS) {
++        qCWarning(lcMessaging) << "cannot create context:" << err;
++        return toSignatureResult(err);
++    }
++
++    err = rnp_input_from_memory(&input, (uint8_t*) sigData.constData(), sigData.size(), false);
++    if (err != RNP_SUCCESS) {
++        qCWarning(lcMessaging) << "cannot read signature data:" << err;
++        return toSignatureResult(err);
++    }
++
++    err = rnp_output_memory_get_buf(output, &buf, &buf_len, true);
++    if (err != RNP_SUCCESS) {
++        qCWarning(lcMessaging) << "cannot create output data:" << err;
++        return toSignatureResult(err);
++    }
++
++    err = rnp_op_verify_create(&verify, ctx, input, output);
++    if (err != RNP_SUCCESS) {
++        qCWarning(lcMessaging) << "cannot create verify context:" << err;
++        return toSignatureResult(err);
++    }
++
++    err = rnp_op_verify_execute(verify);
++    if (err != RNP_SUCCESS) {
++        qCWarning(lcMessaging) << "cannot execute verify operation:" << err;
++        return toSignatureResult(err);
++    }
++
++    /* now check signatures and get some info about them */
++    if (rnp_op_verify_get_signature_count(verify, &sigcount) != RNP_SUCCESS) {
++        qCWarning(lcMessaging) <<  "failed to get signature count" << err;
++        return toSignatureResult(err);
++    }
++
++    for (size_t i = 0; i < sigcount; i++) {
++        rnp_op_verify_signature_t sig = NULL;
++        rnp_result_t              sigstatus = RNP_SUCCESS;
++        rnp_key_handle_t          key = NULL;
++        char *                    keyid = NULL;
++        char *                    fpr = NULL;
++        rnp_signature_handle_t    handle = NULL;
++
++
++        if (rnp_op_verify_get_signature_at(verify, i, &sig) != RNP_SUCCESS) {
++            qCWarning(lcMessaging) << "failed to get signature" << (int) i;
++            continue;
++        }
++
++        sigstatus = rnp_op_verify_signature_get_status(sig);
++
++        QVariantMap details;
++        uint32_t created, expires;
++        if (rnp_op_verify_signature_get_times(sig, &created, &expires) == RNP_SUCCESS) {
++            if (created) details.insert("creation date", QVariant(QDateTime::fromMSecsSinceEpoch(  created * 1000)));
++            if (expires) details.insert("expiration date", QVariant(QDateTime::fromMSecsSinceEpoch(expires * 1000)));
++        }
++
++        if(rnp_op_verify_signature_get_handle(sig, &handle) == RNP_SUCCESS) {
++            if (rnp_signature_get_key_fprint(handle, &fpr) == RNP_SUCCESS) {
++                keyResults.append(QMailCrypto::KeyResult(QString::fromLatin1(fpr),
++                                                         toSignatureResult(sigstatus),
++                                                         details));
++                rnp_buffer_destroy(fpr);
++            }
++            rnp_signature_handle_destroy(handle);
++        }
++
++        rnp_buffer_destroy(keyid);
++        rnp_key_handle_destroy(key);
++    }
++
++    /* get the verified message from the output structure */
++    //if (rnp_output_memory_get_buf(output, &buf, &buf_len, false) != RNP_SUCCESS) {
++    //}
++
++    return toSignatureResult(err);
++}
++
++static QMailCrypto::CryptResult toCryptResult(rnp_result_t err)
++{
++    switch (err) {
++    case RNP_SUCCESS:
++        return QMailCrypto::Decrypted;
++    case RNP_ERROR_BAD_PASSWORD:
++        return QMailCrypto::WrongPassphrase;
++    case RNP_ERROR_DECRYPT_FAILED:
++    //case GPG_ERR_NO_DATA:
++    //case GPG_ERR_INV_VALUE:
++    //case GPG_ERR_NO_PUBKEY:
++        return QMailCrypto::NoDigitalEncryption;
++    default:
++        return QMailCrypto::UnknownCryptError;
++    }
++}
++
++QMailCrypto::CryptResult QMailCryptoRNP::decryptData(const QByteArray &encData, QByteArray &decData) const
++{
++    rnp_ffi_t    ctx = NULL;
++    rnp_input_t  keys = NULL;
++    rnp_input_t  enc = NULL;
++    rnp_output_t dec = NULL;
++    uint8_t *    buf = NULL;
++    size_t       buf_len = 0;
++    int          result = 1;
++
++    rnp_result_t err;
++
++    /* initialize FFI object */
++    err = rnp_ffi_create(&ctx, "GPG", "GPG");
++    if (err != RNP_SUCCESS) {
++        qCWarning(lcMessaging) << "cannot create context:" << err;
++        return toCryptResult(err);
++    }
++
++    err = rnp_input_from_memory(&enc,
++                                (uint8_t*) encData.constData(),
++                                encData.size(),
++                                false);
++    if (err != RNP_SUCCESS) {
++        qCWarning(lcMessaging) << "cannot create encoded data:" << err;
++        return toCryptResult(err);
++    }
++
++    err = rnp_decrypt(ctx, enc, dec);
++    if (err != RNP_SUCCESS) {
++        qCWarning(lcMessaging) << "decryption failed";
++        return toCryptResult(err);
++    }
++    err = rnp_output_memory_get_buf(dec, &buf, &buf_len, true);
++    if (err != RNP_SUCCESS) {
++        qCWarning(lcMessaging) << "cannot read decrypted data:" << err;
++        return toCryptResult(err);
++    }
++
++    decData = QByteArray::fromRawData((char*) buf, buf_len);
++
++    rnp_input_destroy(keys);
++    rnp_input_destroy(enc);
++    rnp_output_destroy(dec);
++    rnp_ffi_destroy(ctx);
++
++    return QMailCrypto::Decrypted;
++}
+diff --git a/src/plugins/crypto/common/qrnp.h b/src/plugins/crypto/common/qrnp.h
+new file mode 100644
+index 00000000..93e63ad3
+--- /dev/null
++++ b/src/plugins/crypto/common/qrnp.h
+@@ -0,0 +1,83 @@
++/****************************************************************************
++**
++** Copyright (C) 2018 Caliste Damien.
++** Contact: Damien Caliste <dcaliste@free.fr>
++**
++** Copyright (C) 2018 The Qt Company Ltd.
++** Contact: https://www.qt.io/licensing/
++**
++** This file is part of the Qt Messaging Framework.
++**
++** $QT_BEGIN_LICENSE:LGPL21$
++** Commercial License Usage
++** Licensees holding valid commercial Qt licenses may use this file in
++** accordance with the commercial license agreement provided with the
++** Software or, alternatively, in accordance with the terms contained in
++** a written agreement between you and The Qt Company. For licensing terms
++** and conditions see http://www.qt.io/terms-conditions. For further
++** information use the contact form at http://www.qt.io/contact-us.
++**
++** GNU Lesser General Public License Usage
++** Alternatively, this file may be used under the terms of the GNU Lesser
++** General Public License version 2.1 or version 3 as published by the Free
++** Software Foundation and appearing in the file LICENSE.LGPLv21 and
++** LICENSE.LGPLv3 included in the packaging of this file. Please review the
++** following information to ensure the GNU Lesser General Public License
++** requirements will be met: https://www.gnu.org/licenses/lgpl.html and
++** http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html.
++**
++** As a special exception, The Qt Company gives you certain additional
++** rights. These rights are described in The Qt Company LGPL Exception
++** version 1.1, included in the file LGPL_EXCEPTION.txt in this package.
++**
++** $QT_END_LICENSE$
++**
++****************************************************************************/
++
++#ifndef QMAILCRYPTORNP_H
++#define QMAILCRYPTORNP_H
++
++#include "qmailcrypto.h"
++
++#ifndef _FILE_OFFSET_BITS
++#define _FILE_OFFSET_BITS 64
++#endif
++#include <rnp.h>
++
++#include <QObject>
++
++class QMailCryptoRNP: public QObject, public QMailCryptographicServiceInterface
++{
++    Q_OBJECT
++    Q_INTERFACES(QMailCryptographicServiceInterface)
++
++ public:
++    ~QMailCryptoRNP() {}
++
++    void setPassphraseCallback(QMailCrypto::PassphraseCallback cb) override;
++    QString passphraseCallback(const QString &info) const override;
++
++protected:
++    QMailCryptoRNP();
++
++    QMailCrypto::SignatureResult computeSignature(QMailMessagePartContainer &part,
++                                                  const QStringList &keys,
++                                                  QByteArray &signedData,
++                                                  QByteArray &micalg) const;
++    QMailCrypto::SignatureResult verify(const QByteArray &sigData,
++                                        const QByteArray &messageData,
++                                        QList<QMailCrypto::KeyResult> &keyResults) const;
++
++    QMailCrypto::CryptResult decryptData(const QByteArray &encData, QByteArray &decData) const;
++
++private:
++    QMailCrypto::SignatureResult getSignature(const QByteArray &message,
++                                              const QStringList &keys,
++                                              QByteArray &result,
++                                              QByteArray &micalg) const;
++
++    QString m_protocol;
++    QMailCrypto::PassphraseCallback m_cb;
++};
++
++#endif
+diff --git a/src/plugins/crypto/rnp/rnp.pro b/src/plugins/crypto/rnp/rnp.pro
+new file mode 100644
+index 00000000..b4898376
+--- /dev/null
++++ b/src/plugins/crypto/rnp/rnp.pro
+@@ -0,0 +1,10 @@
++TEMPLATE = lib
++TARGET = gpgme
++PLUGIN_TYPE = messagingframework/crypto
++load(qt_plugin)
++QT = core qmfclient
++
++HEADERS += gpgmeplugin.h
++SOURCES += gpgmeplugin.cpp
++
++include(../common.pri)
+diff --git a/src/plugins/crypto/rnp/rnpplugin.cpp b/src/plugins/crypto/rnp/rnpplugin.cpp
+new file mode 100644
+index 00000000..28ec972a
+--- /dev/null
++++ b/src/plugins/crypto/rnp/rnpplugin.cpp
+@@ -0,0 +1,151 @@
++/****************************************************************************
++**
++** Copyright (C) 2018 Caliste Damien.
++** Contact: Damien Caliste <dcaliste@free.fr>
++**
++** Copyright (C) 2018 The Qt Company Ltd.
++** Contact: https://www.qt.io/licensing/
++**
++** This file is part of the Qt Messaging Framework.
++**
++** $QT_BEGIN_LICENSE:LGPL21$
++** Commercial License Usage
++** Licensees holding valid commercial Qt licenses may use this file in
++** accordance with the commercial license agreement provided with the
++** Software or, alternatively, in accordance with the terms contained in
++** a written agreement between you and The Qt Company. For licensing terms
++** and conditions see http://www.qt.io/terms-conditions. For further
++** information use the contact form at http://www.qt.io/contact-us.
++**
++** GNU Lesser General Public License Usage
++** Alternatively, this file may be used under the terms of the GNU Lesser
++** General Public License version 2.1 or version 3 as published by the Free
++** Software Foundation and appearing in the file LICENSE.LGPLv21 and
++** LICENSE.LGPLv3 included in the packaging of this file. Please review the
++** following information to ensure the GNU Lesser General Public License
++** requirements will be met: https://www.gnu.org/licenses/lgpl.html and
++** http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html.
++**
++** As a special exception, The Qt Company gives you certain additional
++** rights. These rights are described in The Qt Company LGPL Exception
++** version 1.1, included in the file LGPL_EXCEPTION.txt in this package.
++**
++** $QT_END_LICENSE$
++**
++****************************************************************************/
++
++#include "rnpplugin.h"
++#include <qmaillog.h>
++
++QMailCryptoGPG::QMailCryptoGPG() : QMailCryptoRNP()
++{
++}
++
++bool QMailCryptoGPG::partHasSignature(const QMailMessagePartContainer &part) const
++{
++    if (part.multipartType() != QMailMessagePartContainer::MultipartSigned || part.partCount() != 2)
++        return false;
++
++    const QMailMessagePart signature = part.partAt(1);
++
++    if (!signature.contentType().matches("application", "pgp-signature"))
++        return false;
++
++    return true;
++}
++
++QMailCrypto::VerificationResult QMailCryptoGPG::verifySignature(const QMailMessagePartContainer &part) const
++{
++    if (!partHasSignature(part))
++        return QMailCrypto::VerificationResult(QMailCrypto::MissingSignature);
++
++    QMailMessagePart body = part.partAt(0);
++    QMailMessagePart signature = part.partAt(1);
++
++    if (!body.contentAvailable() || !signature.contentAvailable())
++        return QMailCrypto::VerificationResult();
++
++    QMailCrypto::VerificationResult result;
++    result.engine = QStringLiteral("libgpgme.so");
++    result.summary = verify(signature.body().data(QMailMessageBody::Decoded),
++                      body.undecodedData(), result.keyResults);
++    return result;
++}
++
++QMailCrypto::SignatureResult QMailCryptoGPG::sign(QMailMessagePartContainer *part, const QStringList &keys) const
++{
++    if (!part) {
++        qCWarning(lcMessaging) << "unable to sign a NULL part.";
++        return QMailCrypto::UnknownError;
++    }
++
++    QByteArray signedData, micalg;
++    QMailCrypto::SignatureResult result;
++    result = computeSignature(*part, keys, signedData, micalg);
++    if (result != QMailCrypto::SignatureValid)
++        return result;
++
++    // Set it to multipart/signed content-type.
++    QList<QMailMessageHeaderField::ParameterType> parameters;
++    parameters << QMailMessageHeaderField::ParameterType("micalg", micalg);
++    parameters << QMailMessageHeaderField::ParameterType("protocol", "application/pgp-signature");
++    part->setMultipartType(QMailMessagePartContainer::MultipartSigned, parameters);
++
++    // Write the signature data in the second part.
++    QMailMessagePart &signature = part->partAt(1);
++
++    signature.setBody(QMailMessageBody::fromData(signedData,
++                                                 QMailMessageContentType("application/pgp-signature"),
++                                                 QMailMessageBody::SevenBit));
++    signature.setContentDescription("OpenPGP digital signature");
++
++    return QMailCrypto::SignatureValid;
++}
++
++bool QMailCryptoGPG::canDecrypt(const QMailMessagePartContainer &part) const
++{
++    if (part.isEncrypted()) {
++        const QMailMessagePart &control = part.partAt(0);
++        if (control.contentType().matches("application", "pgp-encrypted")
++            && control.hasBody()) {
++            return control.body().data().startsWith(QString::fromLatin1("Version: 1"));
++        }
++    }
++    return false;
++}
++
++QMailCrypto::DecryptionResult QMailCryptoGPG::decrypt(QMailMessagePartContainer *part) const
++{
++    if (!part) {
++        qCWarning(lcMessaging) << "unable to decrypt a NULL part.";
++        return QMailCrypto::DecryptionResult();
++    }
++
++    if (!canDecrypt(*part))
++        return QMailCrypto::DecryptionResult(QMailCrypto::UnsupportedProtocol);
++
++    const QMailMessagePart &body = part->partAt(1);
++
++    if (!body.contentAvailable())
++        return QMailCrypto::DecryptionResult();
++
++    QByteArray decData;
++    QMailCrypto::DecryptionResult result;
++    result.engine = QStringLiteral("libgpgme.so");
++    result.status = decryptData(body.body().data(QMailMessageBody::Decoded), decData);
++    if (result.status == QMailCrypto::Decrypted) {
++        const QMailMessage mail = QMailMessage::fromRfc2822(decData);
++
++        part->clearParts();
++        if (mail.partCount() > 0) {
++            part->setMultipartType(mail.multipartType(),
++                                   mail.contentType().parameters());
++            for (uint i = 0; i < mail.partCount(); i++) {
++                part->appendPart(mail.partAt(i));
++            }
++        } else {
++            part->setBody(mail.body());
++        }
++    }
++    return result;
++}
+diff --git a/src/plugins/crypto/rnp/rnpplugin.h b/src/plugins/crypto/rnp/rnpplugin.h
+new file mode 100644
+index 00000000..5c5427c5
+--- /dev/null
++++ b/src/plugins/crypto/rnp/rnpplugin.h
+@@ -0,0 +1,59 @@
++/****************************************************************************
++**
++** Copyright (C) 2018 Caliste Damien.
++** Contact: Damien Caliste <dcaliste@free.fr>
++**
++** Copyright (C) 2018 The Qt Company Ltd.
++** Contact: https://www.qt.io/licensing/
++**
++** This file is part of the Qt Messaging Framework.
++**
++** $QT_BEGIN_LICENSE:LGPL21$
++** Commercial License Usage
++** Licensees holding valid commercial Qt licenses may use this file in
++** accordance with the commercial license agreement provided with the
++** Software or, alternatively, in accordance with the terms contained in
++** a written agreement between you and The Qt Company. For licensing terms
++** and conditions see http://www.qt.io/terms-conditions. For further
++** information use the contact form at http://www.qt.io/contact-us.
++**
++** GNU Lesser General Public License Usage
++** Alternatively, this file may be used under the terms of the GNU Lesser
++** General Public License version 2.1 or version 3 as published by the Free
++** Software Foundation and appearing in the file LICENSE.LGPLv21 and
++** LICENSE.LGPLv3 included in the packaging of this file. Please review the
++** following information to ensure the GNU Lesser General Public License
++** requirements will be met: https://www.gnu.org/licenses/lgpl.html and
++** http://www.gnu.org/licenses/old-licenses/lgpl-2.1.html.
++**
++** As a special exception, The Qt Company gives you certain additional
++** rights. These rights are described in The Qt Company LGPL Exception
++** version 1.1, included in the file LGPL_EXCEPTION.txt in this package.
++**
++** $QT_END_LICENSE$
++**
++****************************************************************************/
++
++#ifndef RNPPLUGIN_H
++#define RNPPLUGIN_H
++
++#include "qrnp.h"
++
++class QMailCryptoGPG : public QMailCryptoRNP
++{
++    Q_OBJECT
++    Q_PLUGIN_METADATA(IID "org.qt-project.Qt.QMailCryptographicServiceInterface")
++
++public:
++    QMailCryptoGPG();
++    ~QMailCryptoGPG() {}
++
++    bool partHasSignature(const QMailMessagePartContainer &part) const override;
++    QMailCrypto::VerificationResult verifySignature(const QMailMessagePartContainer &part) const override;
++    QMailCrypto::SignatureResult sign(QMailMessagePartContainer *part, const QStringList &keys) const override;
++
++    bool canDecrypt(const QMailMessagePartContainer &part) const override;
++    QMailCrypto::DecryptionResult decrypt(QMailMessagePartContainer *part) const override;
++};
++
++#endif
