@@ -26,10 +26,10 @@ index 1e3fee2e..9c56dc79 100644
 +
 diff --git a/src/plugins/crypto/common/qrnp.cpp b/src/plugins/crypto/common/qrnp.cpp
 new file mode 100644
-index 00000000..28cd174c
+index 00000000..121b35f3
 --- /dev/null
 +++ b/src/plugins/crypto/common/qrnp.cpp
-@@ -0,0 +1,625 @@
+@@ -0,0 +1,628 @@
 +/****************************************************************************
 +**
 +** Copyright (C) 2018 Caliste Damien.
@@ -75,14 +75,14 @@ index 00000000..28cd174c
 +QMailCryptoRNP::QMailCryptoRNP()
 +    : m_cb(0)
 +{
-+    rnp_result_t err;
-+
 +    qCInfo(lcMessaging) << "Using RNP" << rnp_version_string_full();
 +
 +    /*
++    gpgme_error_t err;
++
 +    gpgme_check_version(NULL);
 +    err = gpgme_engine_check_version(protocol);
-+    if (err != RNP_SUCCESS) {
++    if (gpgme_err_code(err) != GPG_ERR_NO_ERROR) {
 +        qCWarning(lcMessaging) << QStringLiteral("cannot use %1 engine.").arg(gpgme_get_protocol_name(protocol));
 +
 +        gpgme_engine_info_t info;
@@ -105,7 +105,7 @@ index 00000000..28cd174c
 +            }
 +        } else {
 +            qCWarning(lcMessaging) << "cannot get engine info:"
-+                                   << err;
++                                   << gpgme_strerror(err);
 +        }
 +    }
 +    */
@@ -144,9 +144,6 @@ index 00000000..28cd174c
 +        return QMailCrypto::BadPassphrase;
 +    case RNP_ERROR_SIGNATURE_INVALID:
 +        return QMailCrypto::BadSignature;
-+    //case GPG_ERR_NO_DATA:
-+    //case GPG_ERR_INV_VALUE:
-+    //case GPG_ERR_NO_PUBKEY:
 +    case RNP_ERROR_SIG_NO_SIGNER_KEY:
 +        return QMailCrypto::MissingKey;
 +    default:
@@ -166,8 +163,17 @@ index 00000000..28cd174c
 +    return QString();
 +}
 +
++static rnp_result_t rnp_passphraseCallback(void *hook, const char *uid_hint,
++                                               const char *passphrase_info,
++                                               int prev_was_bad, int fd)
++{
++     QMailCryptoSMIME *obj = static_cast<QMailCryptoSMIME*>(hook);
++     QString pass = obj->passphraseCallback(QString(passphrase_info));
++     return GPG_ERR_NO_ERROR;
++}
++
 +// To be used later, see the if (m_cb) in getSignature.
-+// static rnp_result_t gpgme_passphraseCallback(void *hook, const char *uid_hint,
++// static gpgme_error_t gpgme_passphraseCallback(void *hook, const char *uid_hint,
 +//                                               const char *passphrase_info,
 +//                                               int prev_was_bad, int fd)
 +// {
@@ -180,7 +186,7 @@ index 00000000..28cd174c
 +//     gpgme_io_write(fd, pass.toLocal8Bit().data(), pass.length());
 +//     gpgme_io_write(fd, "\n", 1);
 +
-+//     return RNP_SUCCESS;
++//     return GPG_ERR_NO_ERROR;
 +// }
 +
 +struct RNPContext {
@@ -346,9 +352,7 @@ index 00000000..28cd174c
 +    result.clear();
 +    micalg.clear();
 +
-+
 +    RNPOutputData sig;
-+
 +    if (!sig.isValid()) {
 +        qCWarning(lcMessaging) << "cannot create signature data:" << sig.errorMessage();
 +        return toSignatureResult(sig.err);
@@ -375,9 +379,6 @@ index 00000000..28cd174c
 +        return toSignatureResult(ctx.err);
 +    }
 +
-+    rnp_op_sign_t    sign = NULL;
-+    rnp_key_handle_t key = NULL;
-+
 +    RNPOutputData output;
 +    if (!output.isValid()) {
 +        qCWarning(lcMessaging) << "cannot create message data:" << data.errorMessage();
@@ -385,6 +386,7 @@ index 00000000..28cd174c
 +    }
 +
 +    /* initialize and configure sign operation */
++    rnp_op_sign_t    sign = NULL;
 +    if (rnp_op_sign_cleartext_create(&sign, ctx, data, output) != RNP_SUCCESS) {
 +        qCWarning(lcMessaging) << "failed to create sign operation" << err;
 +        return toSignatureResult(err);
@@ -402,6 +404,7 @@ index 00000000..28cd174c
 +    /* set hash algorithm - should be compatible for all signatures */
 +    rnp_op_sign_set_hash(sign, DEFAULT_HASH_ALG);
 +
++    rnp_key_handle_t key = NULL;
 +    for (QStringList::const_iterator it = keys.begin(); it != keys.end(); it++) {
 +        // param identifier_type string with type of the identifier: userid, keyid, fingerprint, grip
 +        if (rnp_locate_key(ctx, "userid", it->toLocal8Bit().data(), &key) != RNP_SUCCESS) {
@@ -418,29 +421,32 @@ index 00000000..28cd174c
 +        key = NULL;
 +    }
 +
-+/*
 +    if (m_cb) {
 +        // Only working for gnupg >= 2.1
 +        // Will be activated later.
 +        // gpgme_set_pinentry_mode(ctx, GPGME_PINENTRY_MODE_LOOPBACK);
 +        // gpgme_set_passphrase_cb(ctx, gpgme_passphraseCallback, (void*)this);
-+        qCWarning(lcMessaging) << "passphrase callback not implemented";
++        // gpgme_set_passphrase_cb(ctx, gpgme_passphraseCallback, (void*)this);
++        //qCWarning(lcMessaging) << "passphrase callback not implemented";
 +
-+        // For testing purpose, just creating a md5 of data
-+        // and use this as signature data.
-+        QCryptographicHash md5(QCryptographicHash::Md5);
-+        md5.addData(mess);
-+        result = md5.result().toHex();
++        qCWarning(lcMessaging) << "passphrase callback set from RNP, not tested";
++        if (rnp_ffi_set_pass_provider(ctx, rnp_passphraseCallback, (void*)this)) != RNP_SUCCESS {
++            qCWarning(lcMessaging) << "Setting passphrase callback failed, using testing workflow";
++            // For testing purpose, just creating a md5 of data
++            // and use this as signature data.
++            QCryptographicHash md5(QCryptographicHash::Md5);
++            md5.addData(mess);
++            result = md5.result().toHex();
 +
-+        micalg = "pgp-md5";
++            micalg = "pgp-md5";
 +
-+        return QMailCrypto::SignatureValid;
++            return QMailCrypto::SignatureValid;
++        }
 +    }
-+*/
-+    /* finally do signing */
++
 +    err = rnp_op_sign_execute(sign);
 +    if (err != RNP_SUCCESS) {
-+        qCWarning(lcMessaging) << "failed to sign" << err;
++        qCWarning(lcMessaging) << "cannot sign" << err;
 +        return toSignatureResult(err);
 +    }
 +
@@ -514,8 +520,6 @@ index 00000000..28cd174c
 +{
 +    keyResults.clear();
 +    rnp_op_verify_t verify = NULL;
-+    uint8_t *       buf = NULL;
-+    size_t          buf_len = 0;
 +    size_t          sigcount = 0;
 +
 +    RNPInputData sig(sigData);
@@ -546,7 +550,7 @@ index 00000000..28cd174c
 +    rnp_result_t err = RNP_ERROR_GENERIC;
 +    err = rnp_op_verify_create(&verify, ctx, signed_text, output);
 +    if (err != RNP_SUCCESS) {
-+        qCWarning(lcMessaging) << "verification fails:" << err;
++        qCWarning(lcMessaging) << "verification fails:" << err << ctx.err;
 +        return toSignatureResult(err);
 +    }
 +
@@ -616,9 +620,8 @@ index 00000000..28cd174c
 +    case RNP_ERROR_BAD_PASSWORD:
 +        return QMailCrypto::WrongPassphrase;
 +    case RNP_ERROR_DECRYPT_FAILED:
-+    //case GPG_ERR_NO_DATA:
-+    //case GPG_ERR_INV_VALUE:
-+    //case GPG_ERR_NO_PUBKEY:
++    case RNP_ERROR_KEY_NOT_FOUND:
++    case RNP_ERROR_NO_SUITABLE_KEY:
 +        return QMailCrypto::NoDigitalEncryption;
 +    default:
 +        return QMailCrypto::UnknownCryptError;
