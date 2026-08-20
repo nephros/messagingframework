@@ -661,7 +661,7 @@ index 00000000..b4898376
 +include(../common.pri)
 diff --git a/src/plugins/crypto/rnp/rnpplugin.cpp b/src/plugins/crypto/rnp/rnpplugin.cpp
 new file mode 100644
-index 00000000..28ec972a
+index 00000000..c9fdac0d
 --- /dev/null
 +++ b/src/plugins/crypto/rnp/rnpplugin.cpp
 @@ -0,0 +1,151 @@
@@ -733,7 +733,7 @@ index 00000000..28ec972a
 +        return QMailCrypto::VerificationResult();
 +
 +    QMailCrypto::VerificationResult result;
-+    result.engine = QStringLiteral("libgpgme.so");
++    result.engine = QStringLiteral("librnp.so");
 +    result.summary = verify(signature.body().data(QMailMessageBody::Decoded),
 +                      body.undecodedData(), result.keyResults);
 +    return result;
@@ -798,7 +798,7 @@ index 00000000..28ec972a
 +
 +    QByteArray decData;
 +    QMailCrypto::DecryptionResult result;
-+    result.engine = QStringLiteral("libgpgme.so");
++    result.engine = QStringLiteral("librnp.so");
 +    result.status = decryptData(body.body().data(QMailMessageBody::Decoded), decData);
 +    if (result.status == QMailCrypto::Decrypted) {
 +        const QMailMessage mail = QMailMessage::fromRfc2822(decData);
