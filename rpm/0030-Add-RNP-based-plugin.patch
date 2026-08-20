@@ -1,11 +1,9 @@
-diff --git a/src/plugins/crypto/CMakeLists.txt b/src/plugins/crypto/CMakeLists.txt
-index 4005b4a0..75e0b752 100644
---- a/src/plugins/crypto/CMakeLists.txt
-+++ b/src/plugins/crypto/CMakeLists.txt
-@@ -1,2 +1,3 @@
- add_subdirectory(gpgme)
- add_subdirectory(smime)
-+add_subdirectory(rnp)
+commit d10c601a35ebdc8af1761ef5a4b8c86a54e179e8
+Author: Peter G. (nephros) <sailfish@nephros.org>
+Date:   Thu Aug 20 11:22:38 2026 +0200
+
+    RNP Plugin: adjust qmake build files
+
 diff --git a/src/plugins/crypto/common.pri b/src/plugins/crypto/common.pri
 index 1e3fee2e..6fb22ceb 100644
 --- a/src/plugins/crypto/common.pri
@@ -22,12 +20,372 @@ index 1e3fee2e..6fb22ceb 100644
 +HEADERS += $$PWD/common/qrnp.h
 +SOURCES += $$PWD/common/qrnp.cpp
 +
+diff --git a/src/plugins/crypto/rnp/rnp.pro b/src/plugins/crypto/rnp/rnp.pro
+index b4898376..e29a39ab 100644
+--- a/src/plugins/crypto/rnp/rnp.pro
++++ b/src/plugins/crypto/rnp/rnp.pro
+@@ -1,10 +1,10 @@
+ TEMPLATE = lib
+-TARGET = gpgme
++TARGET = rnp
+ PLUGIN_TYPE = messagingframework/crypto
+ load(qt_plugin)
+ QT = core qmfclient
+ 
+-HEADERS += gpgmeplugin.h
+-SOURCES += gpgmeplugin.cpp
++HEADERS += rnpplugin.h
++SOURCES += rnpplugin.cpp
+ 
+ include(../common.pri)
+
+commit 14d1c78c69a8a9dd16d0e2d5cd61fb1bc85fc3da
+Author: Peter G. (nephros) <sailfish@nephros.org>
+Date:   Thu Aug 20 11:14:06 2026 +0200
+
+    RNP Plugin: correct library name.
+
+diff --git a/src/plugins/crypto/rnp/rnpplugin.cpp b/src/plugins/crypto/rnp/rnpplugin.cpp
+index 28ec972a..c9fdac0d 100644
+--- a/src/plugins/crypto/rnp/rnpplugin.cpp
++++ b/src/plugins/crypto/rnp/rnpplugin.cpp
+@@ -66,7 +66,7 @@ QMailCrypto::VerificationResult QMailCryptoGPG::verifySignature(const QMailMessa
+         return QMailCrypto::VerificationResult();
+ 
+     QMailCrypto::VerificationResult result;
+-    result.engine = QStringLiteral("libgpgme.so");
++    result.engine = QStringLiteral("librnp.so");
+     result.summary = verify(signature.body().data(QMailMessageBody::Decoded),
+                       body.undecodedData(), result.keyResults);
+     return result;
+@@ -131,7 +131,7 @@ QMailCrypto::DecryptionResult QMailCryptoGPG::decrypt(QMailMessagePartContainer
+ 
+     QByteArray decData;
+     QMailCrypto::DecryptionResult result;
+-    result.engine = QStringLiteral("libgpgme.so");
++    result.engine = QStringLiteral("librnp.so");
+     result.status = decryptData(body.body().data(QMailMessageBody::Decoded), decData);
+     if (result.status == QMailCrypto::Decrypted) {
+         const QMailMessage mail = QMailMessage::fromRfc2822(decData);
+
+commit a0f9acf3f25888b10ae72011845aaf4bd6581c5e
+Author: Peter G. (nephros) <sailfish@nephros.org>
+Date:   Thu Aug 20 10:45:32 2026 +0200
+
+    Add plugin to CMakeLists.txt
+
+diff --git a/src/plugins/crypto/CMakeLists.txt b/src/plugins/crypto/CMakeLists.txt
+index 4005b4a0..75e0b752 100644
+--- a/src/plugins/crypto/CMakeLists.txt
++++ b/src/plugins/crypto/CMakeLists.txt
+@@ -1,2 +1,3 @@
+ add_subdirectory(gpgme)
+ add_subdirectory(smime)
++add_subdirectory(rnp)
+
+commit 30958a31488c4320b717d04852c6f68320fa9d86
+Author: Peter G. (nephros) <sailfish@nephros.org>
+Date:   Thu Aug 20 10:25:35 2026 +0200
+
+    RNP Plugin: WIP III
+
+diff --git a/src/plugins/crypto/common/qrnp.cpp b/src/plugins/crypto/common/qrnp.cpp
+index 67f19278..992f69a0 100644
+--- a/src/plugins/crypto/common/qrnp.cpp
++++ b/src/plugins/crypto/common/qrnp.cpp
+@@ -178,30 +178,27 @@ QMailCrypto::SignatureResult QMailCryptoRNP::getSignature(const QByteArray &mess
+ 
+     /* create file input and memory output objects for the encrypted message and decrypted
+      * message */
++    QByteArray mess(canonicalizeStr(message));
+     err = rnp_input_from_memory(&input,
+-                                (uint8_t*) message.constData(),
+-                                message.size(),
++                                (uint8_t*) mess.constData(),
++                                mess.size(),
+                                 false);
+     if (err != RNP_SUCCESS) {
+         qCWarning(lcMessaging) << "cannot create encoded data:" << err;
+         return toSignatureResult(err);
+     }
+ 
+-    //if (rnp_output_to_path(&output, "signed.asc") != RNP_SUCCESS) {
+     if (rnp_output_to_memory(&output, 0) != RNP_SUCCESS) {
+         qCWarning(lcMessaging) << "failed to create output object" << err;
+         return toSignatureResult(err);
+     }
+ 
+-    /* initialize and configure sign operation, use
+-     * rnp_op_sign_create_cleartext/rnp_op_sign_create_detached for cleartext or detached
+-     * signature. */
+-    if (rnp_op_sign_create(&sign, ctx, input, output) != RNP_SUCCESS) {
++    /* initialize and configure sign operation */
++    if (rnp_op_sign_cleartext_create(&sign, ctx, input, output) != RNP_SUCCESS) {
+         qCWarning(lcMessaging) << "failed to create sign operation" << err;
+         return toSignatureResult(err);
+     }
+ 
+-
+     /* armor, file name, compression */
+     rnp_op_sign_set_armor(sign, true);
+     //rnp_op_sign_set_file_name(sign, "message.txt");
+@@ -210,15 +207,35 @@ QMailCrypto::SignatureResult QMailCryptoRNP::getSignature(const QByteArray &mess
+     /* signatures creation time - by default will be set to the current time as well */
+     rnp_op_sign_set_creation_time(sign, (uint32_t) time(NULL));
+     /* signatures expiration time - by default will be 0, i.e. never expire */
+-    //rnp_op_sign_set_expiration_time(sign, 365 * 24 * 60 * 60);
++    rnp_op_sign_set_expiration_time(sign, 365 * 24 * 60 * 60);
+     /* set hash algorithm - should be compatible for all signatures */
+     rnp_op_sign_set_hash(sign, RNP_ALGNAME_SHA256);
+ 
+     micalg = "pgp-";
+     micalg += QByteArray(RNP_ALGNAME_SHA256).toLower();
+ 
++    for (QStringList::const_iterator it = keys.begin(); it != keys.end(); it++) {
++        // param identifier_type string with type of the identifier: userid, keyid, fingerprint, grip
++        if (rnp_locate_key(ctx, "userid", it->toLocal8Bit().data(), &key) != RNP_SUCCESS) {
++            qCWarning(lcMessaging) << "failed to locate signing key " <<  it->toLocal8Bit();
++            return QMailCrypto::MissingKey;
++        }
++        /* we do not need pointer to the signature so passing NULL as the last parameter */
++        err = rnp_op_sign_add_signature(sign, key, NULL);
++        if (err != RNP_SUCCESS) {
++            qCWarning(lcMessaging) << "failed to add signature for key" << key << err;
++            return toSignatureResult(err);
++        }
++
++        /* do not forget to destroy key handle */
++        rnp_key_handle_destroy(key);
++        key = NULL;
++
++    }
++
+     /* finally do signing */
+-    if (rnp_op_sign_execute(sign) != RNP_SUCCESS) {
++    err = rnp_op_sign_execute(sign);
++    if (err != RNP_SUCCESS) {
+         qCWarning(lcMessaging) << "failed to sign" << err;
+         return toSignatureResult(err);
+     }
+
+commit 00200c0f49e7caa971c8d1610535d67aa3005187
+Author: Peter G. (nephros) <sailfish@nephros.org>
+Date:   Thu Aug 20 10:08:25 2026 +0200
+
+    RNP Plugin: WIP II
+
+diff --git a/src/plugins/crypto/common/qrnp.cpp b/src/plugins/crypto/common/qrnp.cpp
+index 45f18a2b..67f19278 100644
+--- a/src/plugins/crypto/common/qrnp.cpp
++++ b/src/plugins/crypto/common/qrnp.cpp
+@@ -158,6 +158,163 @@ QMailCrypto::SignatureResult QMailCryptoRNP::getSignature(const QByteArray &mess
+ {
+     result.clear();
+     micalg.clear();
++
++    rnp_ffi_t        ctx = NULL;
++    rnp_input_t      keyfile = NULL;
++    rnp_input_t      input = NULL;
++    rnp_output_t     output = NULL;
++    rnp_op_sign_t    sign = NULL;
++    rnp_key_handle_t key = NULL;
++    //int              result = 1;
++
++    rnp_result_t err;
++
++    /* initialize FFI object */
++    err = rnp_ffi_create(&ctx, "GPG", "GPG");
++    if (err != RNP_SUCCESS) {
++        qCWarning(lcMessaging) << "cannot create context:" << err;
++        return toSignatureResult(err);
++    }
++
++    /* create file input and memory output objects for the encrypted message and decrypted
++     * message */
++    err = rnp_input_from_memory(&input,
++                                (uint8_t*) message.constData(),
++                                message.size(),
++                                false);
++    if (err != RNP_SUCCESS) {
++        qCWarning(lcMessaging) << "cannot create encoded data:" << err;
++        return toSignatureResult(err);
++    }
++
++    //if (rnp_output_to_path(&output, "signed.asc") != RNP_SUCCESS) {
++    if (rnp_output_to_memory(&output, 0) != RNP_SUCCESS) {
++        qCWarning(lcMessaging) << "failed to create output object" << err;
++        return toSignatureResult(err);
++    }
++
++    /* initialize and configure sign operation, use
++     * rnp_op_sign_create_cleartext/rnp_op_sign_create_detached for cleartext or detached
++     * signature. */
++    if (rnp_op_sign_create(&sign, ctx, input, output) != RNP_SUCCESS) {
++        qCWarning(lcMessaging) << "failed to create sign operation" << err;
++        return toSignatureResult(err);
++    }
++
++
++    /* armor, file name, compression */
++    rnp_op_sign_set_armor(sign, true);
++    //rnp_op_sign_set_file_name(sign, "message.txt");
++    rnp_op_sign_set_file_mtime(sign, (uint32_t) time(NULL));
++    //rnp_op_sign_set_compression(sign, "ZIP", 6);
++    /* signatures creation time - by default will be set to the current time as well */
++    rnp_op_sign_set_creation_time(sign, (uint32_t) time(NULL));
++    /* signatures expiration time - by default will be 0, i.e. never expire */
++    //rnp_op_sign_set_expiration_time(sign, 365 * 24 * 60 * 60);
++    /* set hash algorithm - should be compatible for all signatures */
++    rnp_op_sign_set_hash(sign, RNP_ALGNAME_SHA256);
++
++    micalg = "pgp-";
++    micalg += QByteArray(RNP_ALGNAME_SHA256).toLower();
++
++    /* finally do signing */
++    if (rnp_op_sign_execute(sign) != RNP_SUCCESS) {
++        qCWarning(lcMessaging) << "failed to sign" << err;
++        return toSignatureResult(err);
++    }
++
++/*
++    GPGmeData sig;
++    if (!sig.isValid()) {
++        qCWarning(lcMessaging) << "cannot create signature data:" << sig.errorMessage();
++        return toSignatureResult(sig.err);
++    }
++    gpgme_error_t err;
++    err = gpgme_data_set_encoding(sig, GPGME_DATA_ENCODING_ARMOR);
++    if (gpgme_err_code(err) != GPG_ERR_NO_ERROR) {
++        qCWarning(lcMessaging) << "cannot set ascii armor on signature:" << gpgme_strerror(err);
++        return toSignatureResult(err);
++    }
++
++    QByteArray mess(canonicalizeStr(message));
++    GPGmeData data(mess);
++    if (!data.isValid()) {
++        qCWarning(lcMessaging) << "cannot create message data:" << data.errorMessage();
++        return toSignatureResult(data.err);
++    }
++
++    GPGmeContext ctx(m_protocol);
++    if (!ctx) {
++        qCWarning(lcMessaging) << "cannot create context:" << ctx.errorMessage();
++        return toSignatureResult(ctx.err);
++    }
++    gpgme_set_textmode(ctx, 1);
++    gpgme_set_armor(ctx, 1);
++    gpgme_signers_clear(ctx);
++
++    for (QStringList::const_iterator it = keys.begin(); it != keys.end(); it++) {
++        gpgme_key_t key;
++        const int RETRIEVE_SECRET_KEY = 1;
++        err = gpgme_get_key(ctx, it->toLocal8Bit().data(), &key, RETRIEVE_SECRET_KEY);
++        if (gpgme_err_code(err) != GPG_ERR_NO_ERROR) {
++            qCWarning(lcMessaging) << "cannot retrieve key" << *it;
++            return toSignatureResult(err);
++        }
++        err = gpgme_signers_add(ctx, key);
++        if (gpgme_err_code(err) != GPG_ERR_NO_ERROR) {
++            qCWarning(lcMessaging) << "cannot add key" << *it;
++            gpgme_key_unref(key);
++            return toSignatureResult(err);
++        }
++        gpgme_key_unref(key);
++    }
++
++    if (m_cb) {
++        // Only working for gnupg >= 2.1
++        // Will be activated later.
++        // gpgme_set_pinentry_mode(ctx, GPGME_PINENTRY_MODE_LOOPBACK);
++        // gpgme_set_passphrase_cb(ctx, gpgme_passphraseCallback, (void*)this);
++        qCWarning(lcMessaging) << "passphrase callback not implemented";
++
++        // For testing purpose, just creating a md5 of data
++        // and use this as signature data.
++        QCryptographicHash md5(QCryptographicHash::Md5);
++        md5.addData(mess);
++        result = md5.result().toHex();
++
++        micalg = "pgp-md5";
++
++        return QMailCrypto::SignatureValid;
++    }
++
++    err = gpgme_op_sign(ctx, data, sig, GPGME_SIG_MODE_DETACH);
++    if (gpgme_err_code(err) != GPG_ERR_NO_ERROR) {
++        qCWarning(lcMessaging) << "cannot sign" << gpgme_strerror(err);
++        return toSignatureResult(err);
++    }
++
++    gpgme_sign_result_t res;
++    res = gpgme_op_sign_result(ctx);
++    if (res->invalid_signers) {
++        qCWarning(lcMessaging) << "found invalid signer" << res->invalid_signers->fpr;
++        return QMailCrypto::MissingKey;
++    }
++    if (!res->signatures || res->signatures->next) {
++        qCWarning(lcMessaging) << "found zero or more than one signature";
++        return QMailCrypto::MissingKey;
++    }
++    micalg = "pgp-";
++    micalg += QByteArray(gpgme_hash_algo_name(res->signatures->hash_algo)).toLower();
++
++    result = sig.releaseData();
++*/
++
++    rnp_input_destroy(keyfile);
++    rnp_key_handle_destroy(key);
++    rnp_op_sign_destroy(sign);
++    rnp_input_destroy(input);
++    rnp_output_destroy(output);
++    rnp_ffi_destroy(ctx);
+     return QMailCrypto::SignatureValid;
+ }
+ 
+@@ -227,8 +384,7 @@ QMailCrypto::SignatureResult QMailCryptoRNP::verify(const QByteArray &sigData,
+         return toSignatureResult(err);
+     }
+ 
+-    const uint8_t* sigD = reinterpret_cast<const uint8_t*>(sigData.constData());
+-    err = rnp_input_from_memory(&input, sigD, sigData.size(), false);
++    err = rnp_input_from_memory(&input, (uint8_t*) sigData.constData(), sigData.size(), false);
+     if (err != RNP_SUCCESS) {
+         qCWarning(lcMessaging) << "cannot read signature data:" << err;
+         return toSignatureResult(err);
+@@ -338,9 +494,8 @@ QMailCrypto::CryptResult QMailCryptoRNP::decryptData(const QByteArray &encData,
+         return toCryptResult(err);
+     }
+ 
+-    const uint8_t* input = reinterpret_cast<const uint8_t*>(encData.constData());
+     err = rnp_input_from_memory(&enc,
+-                                input,
++                                (uint8_t*) encData.constData(),
+                                 encData.size(),
+                                 false);
+     if (err != RNP_SUCCESS) {
+@@ -359,8 +514,7 @@ QMailCrypto::CryptResult QMailCryptoRNP::decryptData(const QByteArray &encData,
+         return toCryptResult(err);
+     }
+ 
+-    const char* output = reinterpret_cast<char*>(buf);
+-    decData = QByteArray::fromRawData(output, buf_len);
++    decData = QByteArray::fromRawData((char*) buf, buf_len);
+ 
+     rnp_input_destroy(keys);
+     rnp_input_destroy(enc);
+
+commit b76828f8680ecb5b0f0a52f3b397ef280e178c33
+Author: Peter G. (nephros) <sailfish@nephros.org>
+Date:   Wed Aug 19 22:32:12 2026 +0200
+
+    RNP Plugin: WIP I
+
 diff --git a/src/plugins/crypto/common/qrnp.cpp b/src/plugins/crypto/common/qrnp.cpp
 new file mode 100644
-index 00000000..992f69a0
+index 00000000..45f18a2b
 --- /dev/null
 +++ b/src/plugins/crypto/common/qrnp.cpp
-@@ -0,0 +1,542 @@
+@@ -0,0 +1,371 @@
 +/****************************************************************************
 +**
 +** Copyright (C) 2018 Caliste Damien.
@@ -188,180 +546,6 @@ index 00000000..992f69a0
 +{
 +    result.clear();
 +    micalg.clear();
-+
-+    rnp_ffi_t        ctx = NULL;
-+    rnp_input_t      keyfile = NULL;
-+    rnp_input_t      input = NULL;
-+    rnp_output_t     output = NULL;
-+    rnp_op_sign_t    sign = NULL;
-+    rnp_key_handle_t key = NULL;
-+    //int              result = 1;
-+
-+    rnp_result_t err;
-+
-+    /* initialize FFI object */
-+    err = rnp_ffi_create(&ctx, "GPG", "GPG");
-+    if (err != RNP_SUCCESS) {
-+        qCWarning(lcMessaging) << "cannot create context:" << err;
-+        return toSignatureResult(err);
-+    }
-+
-+    /* create file input and memory output objects for the encrypted message and decrypted
-+     * message */
-+    QByteArray mess(canonicalizeStr(message));
-+    err = rnp_input_from_memory(&input,
-+                                (uint8_t*) mess.constData(),
-+                                mess.size(),
-+                                false);
-+    if (err != RNP_SUCCESS) {
-+        qCWarning(lcMessaging) << "cannot create encoded data:" << err;
-+        return toSignatureResult(err);
-+    }
-+
-+    if (rnp_output_to_memory(&output, 0) != RNP_SUCCESS) {
-+        qCWarning(lcMessaging) << "failed to create output object" << err;
-+        return toSignatureResult(err);
-+    }
-+
-+    /* initialize and configure sign operation */
-+    if (rnp_op_sign_cleartext_create(&sign, ctx, input, output) != RNP_SUCCESS) {
-+        qCWarning(lcMessaging) << "failed to create sign operation" << err;
-+        return toSignatureResult(err);
-+    }
-+
-+    /* armor, file name, compression */
-+    rnp_op_sign_set_armor(sign, true);
-+    //rnp_op_sign_set_file_name(sign, "message.txt");
-+    rnp_op_sign_set_file_mtime(sign, (uint32_t) time(NULL));
-+    //rnp_op_sign_set_compression(sign, "ZIP", 6);
-+    /* signatures creation time - by default will be set to the current time as well */
-+    rnp_op_sign_set_creation_time(sign, (uint32_t) time(NULL));
-+    /* signatures expiration time - by default will be 0, i.e. never expire */
-+    rnp_op_sign_set_expiration_time(sign, 365 * 24 * 60 * 60);
-+    /* set hash algorithm - should be compatible for all signatures */
-+    rnp_op_sign_set_hash(sign, RNP_ALGNAME_SHA256);
-+
-+    micalg = "pgp-";
-+    micalg += QByteArray(RNP_ALGNAME_SHA256).toLower();
-+
-+    for (QStringList::const_iterator it = keys.begin(); it != keys.end(); it++) {
-+        // param identifier_type string with type of the identifier: userid, keyid, fingerprint, grip
-+        if (rnp_locate_key(ctx, "userid", it->toLocal8Bit().data(), &key) != RNP_SUCCESS) {
-+            qCWarning(lcMessaging) << "failed to locate signing key " <<  it->toLocal8Bit();
-+            return QMailCrypto::MissingKey;
-+        }
-+        /* we do not need pointer to the signature so passing NULL as the last parameter */
-+        err = rnp_op_sign_add_signature(sign, key, NULL);
-+        if (err != RNP_SUCCESS) {
-+            qCWarning(lcMessaging) << "failed to add signature for key" << key << err;
-+            return toSignatureResult(err);
-+        }
-+
-+        /* do not forget to destroy key handle */
-+        rnp_key_handle_destroy(key);
-+        key = NULL;
-+
-+    }
-+
-+    /* finally do signing */
-+    err = rnp_op_sign_execute(sign);
-+    if (err != RNP_SUCCESS) {
-+        qCWarning(lcMessaging) << "failed to sign" << err;
-+        return toSignatureResult(err);
-+    }
-+
-+/*
-+    GPGmeData sig;
-+    if (!sig.isValid()) {
-+        qCWarning(lcMessaging) << "cannot create signature data:" << sig.errorMessage();
-+        return toSignatureResult(sig.err);
-+    }
-+    gpgme_error_t err;
-+    err = gpgme_data_set_encoding(sig, GPGME_DATA_ENCODING_ARMOR);
-+    if (gpgme_err_code(err) != GPG_ERR_NO_ERROR) {
-+        qCWarning(lcMessaging) << "cannot set ascii armor on signature:" << gpgme_strerror(err);
-+        return toSignatureResult(err);
-+    }
-+
-+    QByteArray mess(canonicalizeStr(message));
-+    GPGmeData data(mess);
-+    if (!data.isValid()) {
-+        qCWarning(lcMessaging) << "cannot create message data:" << data.errorMessage();
-+        return toSignatureResult(data.err);
-+    }
-+
-+    GPGmeContext ctx(m_protocol);
-+    if (!ctx) {
-+        qCWarning(lcMessaging) << "cannot create context:" << ctx.errorMessage();
-+        return toSignatureResult(ctx.err);
-+    }
-+    gpgme_set_textmode(ctx, 1);
-+    gpgme_set_armor(ctx, 1);
-+    gpgme_signers_clear(ctx);
-+
-+    for (QStringList::const_iterator it = keys.begin(); it != keys.end(); it++) {
-+        gpgme_key_t key;
-+        const int RETRIEVE_SECRET_KEY = 1;
-+        err = gpgme_get_key(ctx, it->toLocal8Bit().data(), &key, RETRIEVE_SECRET_KEY);
-+        if (gpgme_err_code(err) != GPG_ERR_NO_ERROR) {
-+            qCWarning(lcMessaging) << "cannot retrieve key" << *it;
-+            return toSignatureResult(err);
-+        }
-+        err = gpgme_signers_add(ctx, key);
-+        if (gpgme_err_code(err) != GPG_ERR_NO_ERROR) {
-+            qCWarning(lcMessaging) << "cannot add key" << *it;
-+            gpgme_key_unref(key);
-+            return toSignatureResult(err);
-+        }
-+        gpgme_key_unref(key);
-+    }
-+
-+    if (m_cb) {
-+        // Only working for gnupg >= 2.1
-+        // Will be activated later.
-+        // gpgme_set_pinentry_mode(ctx, GPGME_PINENTRY_MODE_LOOPBACK);
-+        // gpgme_set_passphrase_cb(ctx, gpgme_passphraseCallback, (void*)this);
-+        qCWarning(lcMessaging) << "passphrase callback not implemented";
-+
-+        // For testing purpose, just creating a md5 of data
-+        // and use this as signature data.
-+        QCryptographicHash md5(QCryptographicHash::Md5);
-+        md5.addData(mess);
-+        result = md5.result().toHex();
-+
-+        micalg = "pgp-md5";
-+
-+        return QMailCrypto::SignatureValid;
-+    }
-+
-+    err = gpgme_op_sign(ctx, data, sig, GPGME_SIG_MODE_DETACH);
-+    if (gpgme_err_code(err) != GPG_ERR_NO_ERROR) {
-+        qCWarning(lcMessaging) << "cannot sign" << gpgme_strerror(err);
-+        return toSignatureResult(err);
-+    }
-+
-+    gpgme_sign_result_t res;
-+    res = gpgme_op_sign_result(ctx);
-+    if (res->invalid_signers) {
-+        qCWarning(lcMessaging) << "found invalid signer" << res->invalid_signers->fpr;
-+        return QMailCrypto::MissingKey;
-+    }
-+    if (!res->signatures || res->signatures->next) {
-+        qCWarning(lcMessaging) << "found zero or more than one signature";
-+        return QMailCrypto::MissingKey;
-+    }
-+    micalg = "pgp-";
-+    micalg += QByteArray(gpgme_hash_algo_name(res->signatures->hash_algo)).toLower();
-+
-+    result = sig.releaseData();
-+*/
-+
-+    rnp_input_destroy(keyfile);
-+    rnp_key_handle_destroy(key);
-+    rnp_op_sign_destroy(sign);
-+    rnp_input_destroy(input);
-+    rnp_output_destroy(output);
-+    rnp_ffi_destroy(ctx);
 +    return QMailCrypto::SignatureValid;
 +}
 +
@@ -431,7 +615,8 @@ index 00000000..992f69a0
 +        return toSignatureResult(err);
 +    }
 +
-+    err = rnp_input_from_memory(&input, (uint8_t*) sigData.constData(), sigData.size(), false);
++    const uint8_t* sigD = reinterpret_cast<const uint8_t*>(sigData.constData());
++    err = rnp_input_from_memory(&input, sigD, sigData.size(), false);
 +    if (err != RNP_SUCCESS) {
 +        qCWarning(lcMessaging) << "cannot read signature data:" << err;
 +        return toSignatureResult(err);
@@ -541,8 +726,9 @@ index 00000000..992f69a0
 +        return toCryptResult(err);
 +    }
 +
++    const uint8_t* input = reinterpret_cast<const uint8_t*>(encData.constData());
 +    err = rnp_input_from_memory(&enc,
-+                                (uint8_t*) encData.constData(),
++                                input,
 +                                encData.size(),
 +                                false);
 +    if (err != RNP_SUCCESS) {
@@ -561,7 +747,8 @@ index 00000000..992f69a0
 +        return toCryptResult(err);
 +    }
 +
-+    decData = QByteArray::fromRawData((char*) buf, buf_len);
++    const char* output = reinterpret_cast<char*>(buf);
++    decData = QByteArray::fromRawData(output, buf_len);
 +
 +    rnp_input_destroy(keys);
 +    rnp_input_destroy(enc);
@@ -661,23 +848,23 @@ index 00000000..93e63ad3
 +#endif
 diff --git a/src/plugins/crypto/rnp/rnp.pro b/src/plugins/crypto/rnp/rnp.pro
 new file mode 100644
-index 00000000..e29a39ab
+index 00000000..b4898376
 --- /dev/null
 +++ b/src/plugins/crypto/rnp/rnp.pro
 @@ -0,0 +1,10 @@
 +TEMPLATE = lib
-+TARGET = rnp
++TARGET = gpgme
 +PLUGIN_TYPE = messagingframework/crypto
 +load(qt_plugin)
 +QT = core qmfclient
 +
-+HEADERS += rnpplugin.h
-+SOURCES += rnpplugin.cpp
++HEADERS += gpgmeplugin.h
++SOURCES += gpgmeplugin.cpp
 +
 +include(../common.pri)
 diff --git a/src/plugins/crypto/rnp/rnpplugin.cpp b/src/plugins/crypto/rnp/rnpplugin.cpp
 new file mode 100644
-index 00000000..c9fdac0d
+index 00000000..28ec972a
 --- /dev/null
 +++ b/src/plugins/crypto/rnp/rnpplugin.cpp
 @@ -0,0 +1,151 @@
@@ -749,7 +936,7 @@ index 00000000..c9fdac0d
 +        return QMailCrypto::VerificationResult();
 +
 +    QMailCrypto::VerificationResult result;
-+    result.engine = QStringLiteral("librnp.so");
++    result.engine = QStringLiteral("libgpgme.so");
 +    result.summary = verify(signature.body().data(QMailMessageBody::Decoded),
 +                      body.undecodedData(), result.keyResults);
 +    return result;
@@ -814,7 +1001,7 @@ index 00000000..c9fdac0d
 +
 +    QByteArray decData;
 +    QMailCrypto::DecryptionResult result;
-+    result.engine = QStringLiteral("librnp.so");
++    result.engine = QStringLiteral("libgpgme.so");
 +    result.status = decryptData(body.body().data(QMailMessageBody::Decoded), decData);
 +    if (result.status == QMailCrypto::Decrypted) {
 +        const QMailMessage mail = QMailMessage::fromRfc2822(decData);
