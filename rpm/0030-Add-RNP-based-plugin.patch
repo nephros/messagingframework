@@ -26,10 +26,10 @@ index 1e3fee2e..9c56dc79 100644
 +
 diff --git a/src/plugins/crypto/common/qrnp.cpp b/src/plugins/crypto/common/qrnp.cpp
 new file mode 100644
-index 00000000..dd8ab07d
+index 00000000..e17b69ab
 --- /dev/null
 +++ b/src/plugins/crypto/common/qrnp.cpp
-@@ -0,0 +1,627 @@
+@@ -0,0 +1,629 @@
 +/****************************************************************************
 +**
 +** Copyright (C) 2018 Caliste Damien.
@@ -163,6 +163,7 @@ index 00000000..dd8ab07d
 +    return QString();
 +}
 +
++/*
 +static rnp_result_t rnp_passphraseCallback(void *hook, const char *uid_hint,
 +                                               const char *passphrase_info,
 +                                               int prev_was_bad, int fd)
@@ -171,6 +172,7 @@ index 00000000..dd8ab07d
 +     QString pass = obj->passphraseCallback(QString(passphrase_info));
 +     return GPG_ERR_NO_ERROR;
 +}
++*/
 +
 +// To be used later, see the if (m_cb) in getSignature.
 +// static gpgme_error_t gpgme_passphraseCallback(void *hook, const char *uid_hint,
