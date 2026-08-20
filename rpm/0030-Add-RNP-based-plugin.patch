@@ -26,7 +26,7 @@ index 1e3fee2e..9c56dc79 100644
 +
 diff --git a/src/plugins/crypto/common/qrnp.cpp b/src/plugins/crypto/common/qrnp.cpp
 new file mode 100644
-index 00000000..cc08413b
+index 00000000..6ef24839
 --- /dev/null
 +++ b/src/plugins/crypto/common/qrnp.cpp
 @@ -0,0 +1,625 @@
@@ -518,7 +518,7 @@ index 00000000..cc08413b
 +    size_t          buf_len = 0;
 +    size_t          sigcount = 0;
 +
-+    RNPInoutData sig(sigData);
++    RNPInputData sig(sigData);
 +    if (!sig.isValid()) {
 +        qCWarning(lcMessaging) << "cannot create message data:" << sig.errorMessage();
 +        return toSignatureResult(sig.err);
@@ -546,7 +546,7 @@ index 00000000..cc08413b
 +    rnp_result_t err = RNP_ERROR_GENERIC;
 +    err = rnp_op_verify_create(&verify, ctx, signed_text, output);
 +    if (err != RNP_SUCCESS) {
-+        qCWarning(lcMessaging) << "verification fails:" << gpgme_strerror(err);
++        qCWarning(lcMessaging) << "verification fails:" << err;
 +        return toSignatureResult(err);
 +    }
 +
@@ -633,7 +633,7 @@ index 00000000..cc08413b
 +        return toCryptResult(ctx.err);
 +    }
 +
-+    RNPInoutData enc(encData);
++    RNPInputData enc(encData);
 +    if (!enc.isValid()) {
 +        qCWarning(lcMessaging) << "cannot create encoded data:" << enc.errorMessage();
 +        return toCryptResult(enc.err);
@@ -762,7 +762,7 @@ index 00000000..e29a39ab
 +include(../common.pri)
 diff --git a/src/plugins/crypto/rnp/rnpplugin.cpp b/src/plugins/crypto/rnp/rnpplugin.cpp
 new file mode 100644
-index 00000000..c9fdac0d
+index 00000000..4f2c7e5e
 --- /dev/null
 +++ b/src/plugins/crypto/rnp/rnpplugin.cpp
 @@ -0,0 +1,151 @@
@@ -805,11 +805,11 @@ index 00000000..c9fdac0d
 +#include "rnpplugin.h"
 +#include <qmaillog.h>
 +
-+QMailCryptoGPG::QMailCryptoGPG() : QMailCryptoRNP()
++QMailCryptoOpenPGP::QMailCryptoOpenPGP() : QMailCryptoRNP()
 +{
 +}
 +
-+bool QMailCryptoGPG::partHasSignature(const QMailMessagePartContainer &part) const
++bool QMailCryptoOpenPGP::partHasSignature(const QMailMessagePartContainer &part) const
 +{
 +    if (part.multipartType() != QMailMessagePartContainer::MultipartSigned || part.partCount() != 2)
 +        return false;
@@ -822,7 +822,7 @@ index 00000000..c9fdac0d
 +    return true;
 +}
 +
-+QMailCrypto::VerificationResult QMailCryptoGPG::verifySignature(const QMailMessagePartContainer &part) const
++QMailCrypto::VerificationResult QMailCryptoOpenPGP::verifySignature(const QMailMessagePartContainer &part) const
 +{
 +    if (!partHasSignature(part))
 +        return QMailCrypto::VerificationResult(QMailCrypto::MissingSignature);
@@ -840,7 +840,7 @@ index 00000000..c9fdac0d
 +    return result;
 +}
 +
-+QMailCrypto::SignatureResult QMailCryptoGPG::sign(QMailMessagePartContainer *part, const QStringList &keys) const
++QMailCrypto::SignatureResult QMailCryptoOpenPGP::sign(QMailMessagePartContainer *part, const QStringList &keys) const
 +{
 +    if (!part) {
 +        qCWarning(lcMessaging) << "unable to sign a NULL part.";
@@ -870,7 +870,7 @@ index 00000000..c9fdac0d
 +    return QMailCrypto::SignatureValid;
 +}
 +
-+bool QMailCryptoGPG::canDecrypt(const QMailMessagePartContainer &part) const
++bool QMailCryptoOpenPGP::canDecrypt(const QMailMessagePartContainer &part) const
 +{
 +    if (part.isEncrypted()) {
 +        const QMailMessagePart &control = part.partAt(0);
@@ -882,7 +882,7 @@ index 00000000..c9fdac0d
 +    return false;
 +}
 +
-+QMailCrypto::DecryptionResult QMailCryptoGPG::decrypt(QMailMessagePartContainer *part) const
++QMailCrypto::DecryptionResult QMailCryptoOpenPGP::decrypt(QMailMessagePartContainer *part) const
 +{
 +    if (!part) {
 +        qCWarning(lcMessaging) << "unable to decrypt a NULL part.";
@@ -919,7 +919,7 @@ index 00000000..c9fdac0d
 +}
 diff --git a/src/plugins/crypto/rnp/rnpplugin.h b/src/plugins/crypto/rnp/rnpplugin.h
 new file mode 100644
-index 00000000..5c5427c5
+index 00000000..91e89ec9
 --- /dev/null
 +++ b/src/plugins/crypto/rnp/rnpplugin.h
 @@ -0,0 +1,59 @@
@@ -964,14 +964,14 @@ index 00000000..5c5427c5
 +
 +#include "qrnp.h"
 +
-+class QMailCryptoGPG : public QMailCryptoRNP
++class QMailCryptoOpenPGP : public QMailCryptoRNP
 +{
 +    Q_OBJECT
 +    Q_PLUGIN_METADATA(IID "org.qt-project.Qt.QMailCryptographicServiceInterface")
 +
 +public:
-+    QMailCryptoGPG();
-+    ~QMailCryptoGPG() {}
++    QMailCryptoOpenPGP();
++    ~QMailCryptoOpenPGP() {}
 +
 +    bool partHasSignature(const QMailMessagePartContainer &part) const override;
 +    QMailCrypto::VerificationResult verifySignature(const QMailMessagePartContainer &part) const override;
