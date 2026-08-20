@@ -26,10 +26,10 @@ index 1e3fee2e..9c56dc79 100644
 +
 diff --git a/src/plugins/crypto/common/qrnp.cpp b/src/plugins/crypto/common/qrnp.cpp
 new file mode 100644
-index 00000000..953238a8
+index 00000000..12590a06
 --- /dev/null
 +++ b/src/plugins/crypto/common/qrnp.cpp
-@@ -0,0 +1,542 @@
+@@ -0,0 +1,670 @@
 +/****************************************************************************
 +**
 +** Copyright (C) 2018 Caliste Damien.
@@ -183,6 +183,161 @@ index 00000000..953238a8
 +//     return RNP_SUCCESS;
 +// }
 +
++struct RNPContext {
++    rnp_ffi_t    ffi = NULL;
++    rnp_result_t err = RNP_ERROR_GENERIC;
++    RNPContext()
++        : ffi(0), err(0)
++    {
++        err = rnp_ffi_create(&ffi, RNP_KEYSTORE_GPG, RNP_KEYSTORE_GPG);
++        if (err != RNP_SUCCESS) {
++            ffi = NULL;
++            return;
++        }
++/*
++        err = gpgme_set_protocol(ctx, protocol);
++        if (gpgme_err_code(err) != GPG_ERR_NO_ERROR) {
++            gpgme_release(ctx);
++            ctx = 0;
++            return;
++        }
++*/
++    }
++    ~RNPContext()
++    {
++        if (ffi) {
++            rnp_ffi_destroy(ffi);
++        }
++    }
++    bool operator!()
++    {
++        return (ffi == 0);
++    }
++    operator rnp_ffi_t() const
++    {
++        return ffi;
++    }
++    QByteArray errorMessage() const
++    {
++        return (err != RNP_SUCCESS)
++            ? QByteArray::number(err) : QByteArray();
++    }
++};
++
++struct RNPInputData {
++    rnp_input_t data = NULL;
++    rnp_result_t err = RNP_ERROR_GENERIC;
++/*  output has no empty contructor
++    GPGmeData()
++        : data(0), err(0)
++    {
++        err = gpgme_data_new(&data);
++        if (gpgme_err_code(err) != GPG_ERR_NO_ERROR)
++            data = 0;
++    }
++*/
++    // The data hold by origin are not copied. origin should be valid
++    // for the whole life of the created structure.
++    RNPInputData(const QByteArray &origin)
++        : data(0), err(0)
++    {
++        const int DO_COPY = true;
++        err = rnp_input_from_memory(&data, (uint8_t*) origin.constData(),
++                                    origin.length(), DO_COPY);
++        if (err != RNP_SUCCESS)
++            data = 0;
++    }
++    ~RNPInputData()
++    {
++        if (data)
++            rnp_input_destroy(data);
++    }
++    operator rnp_input_t() const
++    {
++        return data;
++    }
++    bool isValid()
++    {
++        return (data != 0);
++    }
++    QByteArray errorMessage() const
++    {
++        return (err != RNP_SUCCESS)
++            ? QByteArray::number(err) : QByteArray();
++    }
++/*
++    QByteArray releaseData()
++    {
++        size_t ln;
++        char *signData = gpgme_data_release_and_get_mem(data, &ln);
++        data = 0;
++
++        QByteArray output(signData, ln);
++        gpgme_free(signData);
++
++        return output;
++    }
++*/
++};
++
++struct RNPOutputData {
++    rnp_output_t  data = NULL;
++    rnp_result_t err = RNP_ERROR_GENERIC;
++    RNPOutputData()
++        : data(0), err(0)
++    {
++        err = rnp_output_to_null(&data);
++        if (err != RNP_SUCCESS)
++            data = 0;
++    }
++/*  output has no input data
++    // The data hold by origin are not copied. origin should be valid
++    // for the whole life of the created structure.
++    GPGmeData(const QByteArray &origin)
++        : data(0), err(0)
++    {
++        const int DO_COPY = true;
++        err = rnp_output_from_memory(&data, (uint8_t*) origin.constData(),
++                                    origin.length(), DO_COPY);
++        if (err != RNP_SUCCESS)
++            data = 0;
++    }
++*/
++    ~RNPOutputData()
++    {
++        if (data)
++            rnp_output_destroy(data);
++    }
++    operator rnp_output_t() const
++    {
++        return data;
++    }
++    bool isValid()
++    {
++        return (data != 0);
++    }
++    QByteArray errorMessage() const
++    {
++        return (err != RNP_SUCCESS)
++            ? QByteArray::number(err) : QByteArray();
++    }
++    QByteArray releaseData()
++    {
++        size_t ln;
++        char *outData; //= gpgme_data_release_and_get_mem(data, &ln);
++        rnp_output_memory_get_buf(data,
++                                  (uint8_t**) &outData,
++                                  &ln,
++                                  true);
++
++        data = 0;
++        QByteArray output(outData, ln);
++        rnp_buffer_destroy(outData);
++
++        return output;
++    }
++};
++
 +QMailCrypto::SignatureResult QMailCryptoRNP::getSignature(const QByteArray &message,
 +                                                            const QStringList &keys,
 +                                                            QByteArray &result,
@@ -191,42 +346,46 @@ index 00000000..953238a8
 +    result.clear();
 +    micalg.clear();
 +
-+    rnp_ffi_t        ctx = NULL;
-+    rnp_input_t      keyfile = NULL;
-+    rnp_input_t      input = NULL;
-+    rnp_output_t     output = NULL;
++
++    RNPOutputData sig;
++
++    if (!sig.isValid()) {
++        qCWarning(lcMessaging) << "cannot create signature data:" << sig.errorMessage();
++        return toSignatureResult(sig.err);
++    }
++    rnp_result_t err = RNP_ERROR_GENERIC;
++/*
++    err = gpgme_data_set_encoding(sig, GPGME_DATA_ENCODING_ARMOR);
++    if (gpgme_err_code(err) != GPG_ERR_NO_ERROR) {
++        qCWarning(lcMessaging) << "cannot set ascii armor on signature:" << gpgme_strerror(err);
++        return toSignatureResult(err);
++    }
++*/
++
++    QByteArray mess(canonicalizeStr(message));
++    RNPInputData data(mess);
++    if (!data.isValid()) {
++        qCWarning(lcMessaging) << "cannot create message data:" << data.errorMessage();
++        return toSignatureResult(data.err);
++    }
++
++    RNPContext ctx;
++    if (!ctx) {
++        qCWarning(lcMessaging) << "cannot create context:" << ctx.errorMessage();
++        return toSignatureResult(ctx.err);
++    }
++
 +    rnp_op_sign_t    sign = NULL;
 +    rnp_key_handle_t key = NULL;
-+    //int              result = 1;
 +
-+    rnp_result_t err;
-+
-+    /* initialize FFI object */
-+    err = rnp_ffi_create(&ctx, "GPG", "GPG");
-+    if (err != RNP_SUCCESS) {
-+        qCWarning(lcMessaging) << "cannot create context:" << err;
-+        return toSignatureResult(err);
-+    }
-+
-+    /* create file input and memory output objects for the encrypted message and decrypted
-+     * message */
-+    QByteArray mess(canonicalizeStr(message));
-+    err = rnp_input_from_memory(&input,
-+                                (uint8_t*) mess.constData(),
-+                                mess.size(),
-+                                false);
-+    if (err != RNP_SUCCESS) {
-+        qCWarning(lcMessaging) << "cannot create encoded data:" << err;
-+        return toSignatureResult(err);
-+    }
-+
-+    if (rnp_output_to_memory(&output, 0) != RNP_SUCCESS) {
-+        qCWarning(lcMessaging) << "failed to create output object" << err;
-+        return toSignatureResult(err);
++    RNPOutputData output;
++    if (!output.isValid()) {
++        qCWarning(lcMessaging) << "cannot create message data:" << data.errorMessage();
++        return toSignatureResult(data.err);
 +    }
 +
 +    /* initialize and configure sign operation */
-+    if (rnp_op_sign_cleartext_create(&sign, ctx, input, output) != RNP_SUCCESS) {
++    if (rnp_op_sign_cleartext_create(&sign, ctx, data, output) != RNP_SUCCESS) {
 +        qCWarning(lcMessaging) << "failed to create sign operation" << err;
 +        return toSignatureResult(err);
 +    }
@@ -241,10 +400,7 @@ index 00000000..953238a8
 +    /* signatures expiration time - by default will be 0, i.e. never expire */
 +    rnp_op_sign_set_expiration_time(sign, 365 * 24 * 60 * 60);
 +    /* set hash algorithm - should be compatible for all signatures */
-+    rnp_op_sign_set_hash(sign, RNP_ALGNAME_SHA256);
-+
-+    micalg = "pgp-";
-+    micalg += QByteArray(RNP_ALGNAME_SHA256).toLower();
++    rnp_op_sign_set_hash(sign, DEFAULT_HASH_ALG);
 +
 +    for (QStringList::const_iterator it = keys.begin(); it != keys.end(); it++) {
 +        // param identifier_type string with type of the identifier: userid, keyid, fingerprint, grip
@@ -273,30 +429,6 @@ index 00000000..953238a8
 +    }
 +
 +/*
-+    GPGmeData sig;
-+    if (!sig.isValid()) {
-+        qCWarning(lcMessaging) << "cannot create signature data:" << sig.errorMessage();
-+        return toSignatureResult(sig.err);
-+    }
-+    gpgme_error_t err;
-+    err = gpgme_data_set_encoding(sig, GPGME_DATA_ENCODING_ARMOR);
-+    if (gpgme_err_code(err) != GPG_ERR_NO_ERROR) {
-+        qCWarning(lcMessaging) << "cannot set ascii armor on signature:" << gpgme_strerror(err);
-+        return toSignatureResult(err);
-+    }
-+
-+    QByteArray mess(canonicalizeStr(message));
-+    GPGmeData data(mess);
-+    if (!data.isValid()) {
-+        qCWarning(lcMessaging) << "cannot create message data:" << data.errorMessage();
-+        return toSignatureResult(data.err);
-+    }
-+
-+    GPGmeContext ctx(m_protocol);
-+    if (!ctx) {
-+        qCWarning(lcMessaging) << "cannot create context:" << ctx.errorMessage();
-+        return toSignatureResult(ctx.err);
-+    }
 +    gpgme_set_textmode(ctx, 1);
 +    gpgme_set_armor(ctx, 1);
 +    gpgme_signers_clear(ctx);
@@ -352,18 +484,14 @@ index 00000000..953238a8
 +        qCWarning(lcMessaging) << "found zero or more than one signature";
 +        return QMailCrypto::MissingKey;
 +    }
-+    micalg = "pgp-";
-+    micalg += QByteArray(gpgme_hash_algo_name(res->signatures->hash_algo)).toLower();
-+
-+    result = sig.releaseData();
 +*/
 +
-+    rnp_input_destroy(keyfile);
++    micalg = "pgp-";
++    micalg += QByteArray(DEFAULT_HASH_ALG).toLower();
++
++    result = sig.releaseData();
++
 +    rnp_key_handle_destroy(key);
-+    rnp_op_sign_destroy(sign);
-+    rnp_input_destroy(input);
-+    rnp_output_destroy(output);
-+    rnp_ffi_destroy(ctx);
 +    return QMailCrypto::SignatureValid;
 +}
 +
